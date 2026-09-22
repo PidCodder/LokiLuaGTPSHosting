@@ -1,0 +1,2478 @@
+Lua API
+Every function your scripts can call, read from this server's engine. Not the upstream docs, which describe a different engine.
+
+Callbacks
+All optional, and each may be registered more than once. Handlers run in registration order. An error inside one is logged and swallowed, never fatal.
+
+onPlayerPickupItemCallback(function(world, player, itemID, count, drop) end) → boolean
+live
+Fires before a dropped pile is picked up. Return true to leave it on the ground.
+
+onPlayerVendingBuyCallback(function(world, player, tile, itemID, itemCount) end) → boolean
+live
+Fires before a vending purchase is paid for. Return true to block the sale.
+
+onPlayerRecycleCallback(function(world, player, itemID, amount, gemsEarned) end) → boolean
+live
+Fires before items are recycled. Return true to refuse it and keep the items.
+
+onPlayerPlaymodAddedCallback(function(player, id, duration, givenBy) end)
+live
+Fires when a playmod is added, whatever added it. givenBy is always nil.
+
+onPlayerPlaymodRemovedCallback(function(player, id) end)
+live
+Fires when a playmod is removed.
+
+onPlayerFishingStatusCallback(function(world, player, tile, status, baitID) end)
+live
+Fishing status: 0 started, 1 fish on the line, 2 missed, 3 caught.
+
+onNPCTileCallback(function(world, npc, tile) end) → boolean
+live
+Fires per tile near an NPC. Return true to claim it.
+
+setNPCScanFilter{2}
+
+onNPCTileCallback(function(world, npc, tile)
+    npc:move(tile:getPosX(), tile:getPosY())
+    return true
+end)
+onNPCBreakCallback(function(world, npc, tile) end) → boolean
+live
+Fires for a tile onNPCTileCallback claimed.
+
+onNPCBreakCallback(function(world, npc, tile)
+    npc:breakTile(tile)
+    return true
+end)
+onHarvestDropCallback(function(world, player, tile, itemID, count) end) → boolean
+live
+Fires before a harvest drops. Return true to cancel the drop and keep the item.
+
+onHarvestDropCallback(function(world, player, tile, itemID, count)
+    stash(player, itemID, count)
+    return true
+end)
+onPlayerPearlsChangeCallback(function(player, before, after) end)
+live
+Fires when a player's Pearls balance changes. Advisory only.
+
+onPlayerPearlsChangeCallback(function(player, before, after)
+    player:onConsoleMessage("Pearls: " .. after)
+end)
+onTilePlacedCallback(function(world, player, tile) end)
+live
+Fires after a player places a tile.
+
+onTilePlacedCallback(function(world, player, tile)
+    if tile:getTileForeground() == 25002 then
+        world:updateTile(tile)
+    end
+end)
+onPlayerLoginCallback(function(player) end)
+live
+Fires after a successful login.
+
+onPlayerLoginCallback(function(player)
+    player:onConsoleMessage("`2Welcome back, " .. player:getCleanName() .. "!")
+end)
+onPlayerDisconnectCallback(function(player) end)
+live
+Fires when a peer disconnects. Use it to free per-player state.
+
+local session = {}
+
+onPlayerEnterWorldCallback(function(world, player)
+    session[player:getUserID()] = { world = player:getWorldName() }
+end)
+
+onPlayerDisconnectCallback(function(player)
+    session[player:getUserID()] = nil   -- still readable here
+end)
+onPlayerEnterWorldCallback(function(world, player) end)
+live
+Fires when a player finishes entering a world.
+
+onPlayerEnterWorldCallback(function(world, player)
+    player:onConsoleMessage("You entered `w" .. world:getName())
+end)
+onPlayerSendRaw(function(player, packet) end) → boolean
+live
+Fires just before ANY variant packet is sent to a client, which is the wider version of onPlayerVariantCallback: that one is wired at two specific places, this one sits at the single point every variant passes through. packet is a 1-based array of the variant’s arguments, so packet[1] is always its name ("OnConsoleMessage", "OnDialogRequest", "OnFtueButtonDataSet" and so on) and the rest are whatever it carries. Return true to block the packet, anything else to let it through. Use it to log, filter, validate a custom variant before it goes out, or drop one entirely. To change a packet, block the original and send your own with player:sendVariant.
+
+player
+Who the packet is addressed to.
+packet
+The variant’s arguments, packet[1] being the name. Strings, numbers and floats come through as themselves; a 2 or 3 float vector arrives joined as "x,y" or "x,y,z".
+-- log every dialog, and never let a half-built FTUE packet reach a client
+onPlayerSendRaw(function(player, packet)
+    local name = packet[1]
+
+    if name == "OnDialogRequest" then
+        sendLog(player:getName() .. " <- dialog, " .. #packet .. " args")
+    end
+
+    if name == "OnFtueButtonDataSet" and #packet < 5 then
+        return true   -- blocked: not enough arguments to be valid
+    end
+
+    return false
+end)
+onPlayerSendRaw notes
+live
+Worth knowing before you use it. It only covers variant packets, which is everything named like OnSomething; the binary movement and tile stream does not pass through here. It costs nothing at all until a script registers a handler, and after that every outgoing variant runs your Lua, so keep the handler short. Packets your handler itself sends are passed straight through rather than fed back into it, so calling onConsoleMessage from inside is safe and will not recurse. If your handler throws, the error is logged and the packet is sent anyway, so a broken handler cannot silence the server. Blocking is powerful and sharp: dropping the wrong variant can leave a client stuck on a screen that never arrives, so match on packet[1] and let everything else through.
+
+onPlayerCommandCallback(function(world, player, fullCommand) end) → boolean
+live
+Fires when a player types a /command. Lua gets first refusal, before the built-ins.
+
+fullCommand
+The command with no leading slash: "setdelay 1500".
+return true
+Handled. The built-in is skipped.
+return false
+Falls through to the next callback, then to the built-ins.
+onPlayerCommandCallback(function(world, player, fullCommand)
+    local cmd, args = fullCommand:match("^(%S+)%s*(.*)")
+    if cmd == "mycmd" then
+        if not player:hasRole(998) then return false end  -- hide from non-staff
+        player:onConsoleMessage("args: " .. args)
+        return true
+    end
+    return false
+end)
+onPlayerDialogCallback(function(world, player, data) end) → boolean
+live
+Fires when a player interacts with a dialog. data holds dialog_name, buttonClicked, and every other key the dialog returned.
+
+onPlayerDialogCallback(function(world, player, data)
+    if data.dialog_name == "my_menu" and data.buttonClicked == "ok" then
+        player:onConsoleMessage("You picked: " .. tostring(data.choice))
+        return true
+    end
+    return false
+end)
+onTileBreakCallback(function(world, player, tile) end) → boolean
+live
+Fires just before a broken block is cleared, so tile still reads what was there. The return is ignored; restore a block with timer.setTimeout(0, fn).
+
+onTileBreakCallback(function(world, player, tile)
+    if tile:getTileID() == 14 then
+        world:spawnItem(tile:getPosX(), tile:getPosY(), 242, 1)
+        return true
+    end
+    return false
+end)
+onPlayerConsumableCallback(function(world, player, tile, itemID, targetPlayer) end) → boolean
+live
+Fires when a player uses a consumable. Return true to claim the item and skip the engine's own handling.
+
+onPlayerConsumableCallback(function(world, player, tile, itemID, targetPlayer)
+    if itemID == 20222 then
+        showMyUI(player)
+        return true   -- claimed: engine skips its own handling
+    end
+    return false
+end)
+onPlayerActionCallback(function(world, player, data) end) → boolean
+live
+Fires for every action packet from a logged-in player. data is the packet as a table, e.g. data.action, data.text.
+
+sidebar click
+Arrives as data.action = its buttonAction.
+return true
+Claimed. The built-in handling is skipped, which is how a script replaces a built-in screen.
+return false
+The engine carries on. Either way, every registered callback runs.
+onPlayerActionCallback(function(world, player, data)
+    if data.action == "open_profit" then   -- a sidebar buttonAction
+        world:sendPlayerMessage(player, "/sell")   -- runs the command
+        return true
+    end
+    return false
+end)
+onPlayerVariantCallback(function(player, variant, delay, netID) end) → boolean
+live
+Fires before the engine sends certain variants to a client. Return true to suppress it and take over.
+
+OnEventButtonDataSet
+Event and sidebar buttons.
+OnDialogRequest
+A screen the engine is about to open. The payload is the screen text.
+onPlayerVariantCallback(function(player, variant, delay, netID)
+    if variant[1] == "OnDialogRequest" then
+        -- inspect or replace this screen before it is sent
+        return false
+    end
+end)
+onTilePunchCallback(function(world, player, tile) end)
+live
+Fires on every swing, including misses. Advisory. Hotter path than onTileBreak -- keep handlers cheap.
+
+onTilePunchClaimCallback(function(world, player, tile) end) → boolean
+live
+Same swing, but return true to cancel it. Runs after the advisory one.
+
+onTilePunchClaimCallback(function(world, player, tile)
+    if tile:getTileID() == 1008 then return true end   -- this block cannot be punched
+end)
+onPlayerConvertItemCallback(function(world, player, itemID) end) → boolean
+live
+Fires when Convert is pressed. Return true to pay it out yourself.
+
+onPlayerConvertItemCallback(function(world, player, itemID)
+    if itemID ~= 7188 then return false end
+    -- take 100 and give your own reward here
+    return true
+end)
+onGetTileExtraDataCallback(function(world, tile, gameVersion, player) end) → string
+live
+Fires when a tile updates. Return a string to replace that tile's extra data, or false to leave it. gameVersion is a string.
+
+onGetTileExtraDataCallback(function(world, tile, gameVersion, player)
+    if tile:getTileForeground() ~= 25002 then return false end
+    local w = BinaryWriter("")
+    w:WriteUInt8(48)
+    return w:GetCurrentString()
+end)
+onTileWrenchCallback(function(world, player, tile) end)
+live
+Fires when a player wrenches a tile, after the block is resolved and before any per-block-type dialog. Advisory: the wrench menu opens regardless.
+
+onPlayerXPCallback(function(world, player, amount) end)
+live
+Fires after every XP multiplier, so amount is the XP the player actually gained. Event XP uses a different path and is not reported here.
+
+onPlayerCatchFishCallback(function(world, player, rewardID, rewardAmount) end)
+live
+Fires when a fish is landed, with the caught item and its weight.
+
+onPlayerGeigerCallback(function(world, player, itemID, amount) end)
+live
+Fires when a geiger hunt yields an item, with the found item and count.
+
+world
+The world the hunt happened in.
+player
+The player who found it.
+itemID
+Item id that was found.
+amount
+How many were found.
+onPlayerGeigerCallback(function(world, player, itemID, amount)
+    -- code here
+end)
+onPlayerCatchGhostCallback(function(world, player, jarID, amount) end)
+live
+Fires when a player catches a ghost, once the jar is already in their inventory.
+
+world
+The world the ghost was caught in.
+player
+The player who caught it.
+jarID
+Item id the catch produced. It depends on the ghost that was caught, so it is not always the same jar.
+amount
+How many were given.
+local caught = {}
+onPlayerCatchGhostCallback(function(world, player, jarID, amount)
+    local n = player:getName()
+    caught[n] = (caught[n] or 0) + amount
+    player:onConsoleMessage("`2Ghosts caught: " .. caught[n])
+end)
+onPlayerTrainFishCallback(function(world, player) end)
+live
+Fires when a player puts a fish into a fish tank. Advisory: the fish is already in the tank.
+
+world
+The world the tank is in.
+player
+The player who added the fish.
+onPlayerTrainFishCallback(function(world, player)
+    player:onConsoleMessage("`2Fish added to the tank.")
+end)
+onPlayerCookingCallback(function(world, player, resultID, resultAmount, accuracy) end)
+live
+Fires when a player punches an oven and the dish resolves, whether it worked or not.
+
+world
+The world the oven is in.
+player
+The player who cooked.
+resultID
+Item id of the dish the recipe makes, even when the cook was ruined.
+resultAmount
+How many were actually handed over. A ruined cook gives 0, or the recipe's ruinedResult count if it has one, so this is not the same as success.
+accuracy
+0 to 100, how close the timing was. Compare it against the recipe's minAccuracy to tell a real success from a salvaged ruin.
+onPlayerCookingCallback(function(world, player, resultID, resultAmount, accuracy)
+    if accuracy >= 90 then
+        player:onConsoleMessage("`2Perfectly cooked!")
+    end
+end)
+onPlayerPlantCallback(function(world, player, tile) end)
+live
+Fires when a player plants a seed or tree (not magplant). Advisory; the plant happens regardless.
+
+onPlayerPlantCallback(function(world, player, tile)
+    world:sendPlayerMessage(player, "Planted at " .. tile:getPosX() .. "," .. tile:getPosY())
+end)
+onPlayerHarvestCallback(function(world, player, tile, amount) end)
+live
+Fires once per tree harvested. amount is how many fruits it dropped. Advisory: the harvest happens regardless, so the return value is not used.
+
+local trees = {}
+onPlayerHarvestCallback(function(world, player, tile, amount)
+    local n = player:getName()
+    trees[n] = (trees[n] or 0) + 1
+    player:onConsoleMessage("`2Trees harvested: " .. trees[n])
+end)
+onProviderDropCallback(function(world, player, tile, itemID, count) end) → boolean
+live
+Fires per item a Provider is about to pay out, before the magplant bonus and ground drop. Return true to cancel the drop and take the item yourself.
+
+onProviderDropCallback(function(world, player, tile, itemID, count)
+    if itemID == 242 then
+        player:onConsoleMessage("`2Claimed " .. count .. " gems from a provider!")
+        return true
+    end
+end)
+onPlayerGemsObtainedCallback(function(world, player, amount) end)
+live
+Fires when a player is awarded gems. amount is the final figure, after every multiplier.
+
+onPlayerGemsObtainedCallback(function(world, player, amount)
+    if amount >= 1000 then
+        player:onConsoleMessage("`2Big haul: " .. amount .. " gems!")
+    end
+end)
+onPlayerSurgeryCallback(function(world, player, resultID, resultAmount, targetPlayer) end)
+live
+Fires once per completed surgery, on the surgeon. resultID and resultAmount are the prize they were paid. targetPlayer is still nil.
+
+local ops = {}
+onPlayerSurgeryCallback(function(world, player, resultID, resultAmount)
+    local n = player:getName()
+    ops[n] = (ops[n] or 0) + 1
+    player:onConsoleMessage("`2Surgeries done: " .. ops[n])
+end)
+onPlayerProviderCallback(function(world, player, tile, itemID, itemAmount) end)
+live
+Fires each time a provider finishes a cycle and pays out. Advisory: the payout happens regardless.
+
+world
+The world the provider is in.
+player
+The provider's owner.
+tile
+The provider block that paid out.
+itemID
+Item id it produced.
+itemAmount
+How many it produced.
+local prov = {}
+onPlayerProviderCallback(function(world, player, tile, itemID, itemAmount)
+    local n = player:getName()
+    prov[n] = (prov[n] or 0) + itemAmount
+    player:onConsoleMessage("`2Provider items: " .. prov[n])
+end)
+onPlayerRegisterCallback(function(world, player) end)
+live
+Fires once, when an account is first created, not on every login of an existing account.
+
+onPlayerPunchPlayerCallback(function(world, attacker, victim) end)
+live
+PVP hit event, derived from a punch (no native one exists). Fires when a punch lands on another player's tile.
+
+onPlayerPunchPlayerCallback(function(world, attacker, victim)
+    victim:onConsoleMessage("`4You were hit by " .. attacker:getCleanName())
+    -- track HP yourself; on 0, call world:kill(victim)
+end)
+onPlayerKillCallback(function(world, player, killedPlayer) end)
+live
+Fires from world:kill(), the only PVP-style kill the engine has. killedPlayer is passed as both args; no separate killer is known.
+
+onPlayerKillCallback(function(world, player, killedPlayer)
+    print(killedPlayer:getCleanName() .. " was killed")
+end)
+onTick(function() end)
+live
+Fires about once a second. Cheap when unused. A handler that runs longer than its 1000ms budget is aborted rather than allowed to stack up.
+
+local n = 0
+onTick(function()
+    n = n + 1
+    if n % 60 == 0 then print("a minute passed") end
+end)
+onAutoSaveRequest(function() end)
+live
+Fires every 60 seconds as a "save your data now" prompt. It is a periodic tick, not a signal that a save is happening right then.
+
+onAutoSaveRequest(function()
+    saveMyState()
+end)
+onPlayerTick(function(player) end)
+live
+Runs about once per second for each online player. Keep the work light, since it fires for everyone on every tick.
+
+onPlayerTick(function(player)
+    -- runs about once per second, per player
+end)
+onPlayerPutOutFireCallback(function(world, player, tile) end)
+live
+Fires when a player puts a fire out. Advisory; the fire is already out by the time this runs.
+
+onPlayerPutOutFireCallback(function(world, player, tile)
+    player:addGems(50)
+    player:onConsoleMessage("`2Thanks for putting that out!")
+end)
+onBlacklistAccessCallback(function(player) end) → boolean [, string]
+live
+Gates No-/Buy items across buying, spawning and dropping. Once per action. Unregistered, the built-in rule applies.
+
+return true
+Allowed. If several callbacks are registered, any one returning true allows.
+return false
+Denied, and the command stays silent.
+return false, message
+Denied, and the message is shown to the player. Up to 512 bytes.
+onBlacklistAccessCallback(function(player)
+    if player:hasRole(998) then return true end
+    return false, "`4Only staff can buy this."
+end)
+onLootCallback(function(world, player, tile, amount) end)
+live
+Fires whenever a player is granted gems as loot, with the tile it came from.
+
+onLootCallback(function(world, player, tile, amount)
+    player:onConsoleMessage("+" .. amount .. " gems at " .. tile:getPosX() .. "," .. tile:getPosY())
+end)
+onPlayerMovedCallback(function(world, player, x, y) end)
+live
+Fires when a player's tile position changes. Polled, not every pixel of movement.
+
+onPlayerMovedCallback(function(world, player, x, y)
+    player:onConsoleMessage("tile " .. x .. "," .. y)
+end)
+onPlayerStateChangedCallback(function(world, player, state) end)
+live
+Fires on state change: "walking", "lava", "water", or "air".
+
+onPlayerStateChangedCallback(function(world, player, state)
+    if state == "lava" then player:updateHealth(-10) end
+end)
+Globals
+Callable from anywhere, with no prefix.
+
+getServerRoles() → table
+live
+Every role on the server with its id, built-in and custom. Also server:getroleserver().
+
+for _, r in ipairs(getServerRoles()) do
+    print(r.id, r.name, r.custom)
+end
+Roles.ROLE_NAME → number
+live
+Role level by name, built-in or custom. An unknown name raises.
+
+registerLuaCommand({ command = "panel", roleRequired = Roles.ROLE_DEVELOPER })
+if player:hasRole(Roles.ROLE_VIP) then end   -- Roles.VIP works too
+BinaryWriter([bytes]) → BinaryWriter
+live
+Builds binary data, little-endian. Capped at 1 MB.
+
+getDailyQuest() → table
+live
+Today's Crazy Jim quest: item1, count1, item2, count2, reward.
+
+setDailyQuest{ item1 = , count1 = , item2 = , count2 = } → boolean
+live
+Replaces today's Crazy Jim quest. Re-rolled at the next daily reset.
+
+addDailyQuest{ name = , items = , reward = , onComplete = } → number
+live
+Adds a quest below Crazy Jim's own. Up to 32, each doable once a day.
+
+addDailyQuest{
+    name = "Bring Dirt",
+    items = {{2, 50}},
+    reward = {1486, 1},
+    onComplete = function(player, index)
+        player:onConsoleMessage("Thanks!")
+    end,
+}
+getDailyQuests() → table
+live
+The quests added with addDailyQuest.
+
+getClashEvent() → table
+live
+Clash state: active, item, itemName, secondsLeft, secondsUntilNext.
+
+startClashEvent() → boolean
+live
+Starts a Clash event on the next item in the rotation.
+
+stopClashEvent() → boolean
+live
+Ends the running Clash event and settles the leaderboards.
+
+setClashEventItem(itemID) → boolean
+live
+Changes the running Clash event's item. Does not announce it again.
+
+getClashLeaderboard(which [, limit]) → table
+live
+Clash standings, highest first. which is "personal" or "guild".
+
+addClashPoints(player, points) → boolean
+live
+Adds Clash points. Ignored while no event is running.
+
+setClashPoints(eventItemID, { [toolID] = points }) → number
+live
+Sets the points each tool scores for one Clash item. nil clears it.
+
+setReconnectWorldEnabled(enabled) → boolean
+live
+Return a dropped player to the world they were in. On by default.
+
+setReconnectWorldEnabled(false)
+setNPCScanFilter(ids) → number
+live
+Item ids the NPC scan reports. Empty scans everything.
+
+setNPCScanFilter{2, 10}
+setNPCScanFilter()
+setNPCScanInterval(ms) → number
+live
+How often the NPC scan runs. 100 to 5000, default 250.
+
+setNPCScanInterval(150)
+getNewsBanner() → string
+live
+The news banner texture path.
+
+local banner = getNewsBanner()
+getNewsBannerDimensions() → string
+live
+Banner size from the server config. Empty until you set it.
+
+local dims = getNewsBannerDimensions()
+getTodaysDate() → string
+live
+Today's date, like August 21st.
+
+player:onConsoleMessage("Today is " .. getTodaysDate())
+getTodaysEvents() → string
+live
+Event names from the server config. Empty until you set them.
+
+local ev = getTodaysEvents()
+getCurrentEventDescription() → string
+live
+Event text from the server config. Empty until you set it.
+
+local desc = getCurrentEventDescription()
+getCurrentDailyEventDescription() → string
+live
+Daily event text from the server config. Empty until you set it.
+
+local desc = getCurrentDailyEventDescription()
+getCurrentRoleDayDescription() → string
+live
+Role day text from the server config. Empty until you set it.
+
+local desc = getCurrentRoleDayDescription()
+getTopWorldByVisitors() → world or nil
+live
+The World of the Day, or nil when none is set.
+
+local w = getTopWorldByVisitors()
+if w then
+    player:onConsoleMessage("Featured: " .. w:getName())
+end
+resetColor(text) → string
+live
+Appends the colour reset code so later text is not tinted.
+
+local safe = resetColor(getCurrentEventDescription())
+enableCaching(itemID) → boolean
+live
+Accepted for compatibility with other engines. Does nothing here and always returns true.
+
+enableCaching(25002)
+print(...)
+live
+Writes to the server log, prefixed [lua]. There is no client output.
+
+require(name) → any
+live
+Loads another script from your server's script folder by name, without the .lua extension, and returns its value.
+
+registerLuaCommand{ command, roleRequired, exactRole, description, callback }
+live
+Declares a command so it is listed and echoed like a built-in.
+
+command
+Name without the slash.
+roleRequired
+Who sees it in /help. Not a gate by itself, so keep your own hasRole check, or set exactRole. An admin can reassign it to a role in game, which does gate it.
+exactRole
+Only the role in roleRequired sees and runs it. Higher roles are refused. Enforced. The owner always passes.
+description
+Shown in listings.
+callback
+Optional f(player, args), tried before onPlayerCommandCallback.
+registerLuaCommand{
+    command = "card",
+    roleRequired = 0,
+    description = "Open your Credit Card"
+}
+
+registerLuaCommand{
+    command = "vipshop",
+    roleRequired = 1,
+    exactRole = true,
+    description = "VIP only, not shown to higher roles"
+}
+getItem(id) → Item or nil
+live
+Returns an item handle, or nil for an unknown id, so getItem(id) and getItem(id):getName() is safe.
+
+getItemsCount() → number
+live
+Total number of registered items on the server. This is a count, not the highest id.
+
+for id = 0, getItemsCount() - 1 do
+    local it = getItem(id)
+    if it and it:getName() ~= "" then
+        -- ...
+    end
+end
+getServerPlayers() → {Player}
+live
+Every player who is online and has finished logging in, as a 1-based array. Peers still logging in have no name yet and are excluded.
+
+for _, p in ipairs(getServerPlayers()) do
+    p:onConsoleMessage("`2Server restarting in 5 minutes.")
+end
+getWorlds() → {World}
+live
+Worlds currently loaded in memory, as a 1-based array. NOT every world on the server -- only loaded ones. Key by world:getName(), not position.
+
+local function findDrops(itemID)
+    local hits = {}
+    for _, w in ipairs(getWorlds()) do
+        for _, d in ipairs(w:getDroppedItems()) do
+            if d:getItemID() == itemID then
+                hits[#hits + 1] = {
+                    world = w:getName(),
+                    x     = math.floor(d:getPosX() / 32),
+                    y     = math.floor(d:getPosY() / 32),
+                    count = d:getItemCount(),
+                }
+            end
+        end
+    end
+    return hits
+end
+
+onPlayerCommandCallback(function(world, player, cmd)
+    local id = cmd:match("^/finddrop%s+(%d+)$")
+    if not id then return false end
+
+    local hits = findDrops(tonumber(id))
+    player:onConsoleMessage("`2" .. #hits .. "`` result(s) in loaded worlds")
+    for _, h in ipairs(hits) do
+        player:onConsoleMessage("`o" .. h.world .. "`` at " .. h.x .. "," .. h.y .. " x" .. h.count)
+    end
+    return true
+end)
+getWorld(name) → world or nil
+live
+A world by name, loaded from disk if needed. nil if it does not exist. Letters and digits only.
+
+local w = getWorld("QUESTTEMPLATE")
+getPlayer(userID) → Player or nil
+extension
+Finds an online player by the number getUserID() returns, so getPlayer(p:getUserID()) round-trips.
+
+getPlayerByName(name) → Player or nil
+live
+Finds an online player by name, case-insensitively. It matches the engine's own lowercased name field.
+
+getServerName() → string
+live
+The server_name from the server config, the same value the engine compares against its variant macros.
+
+saveDataToServer(key, table) → boolean
+live
+Stores a table in the server's key-value store, JSON-encoded. Uses bound parameters, so script text never reaches SQL.
+
+saveDataToServer("player_" .. player:getUserID(), { done = true, streak = 3 })
+loadDataFromServer(key) → table or nil
+live
+Returns the stored value decoded back into a table, or nil when the key is absent.
+
+local d = loadDataFromServer("player_" .. player:getUserID())
+if d and type(d) == "table" and d.done then
+    -- ...
+end
+saveStringToServer(key, data) → boolean
+live
+String sibling of saveDataToServer: same store, but the value is stored verbatim, not JSON-encoded. Max 1,000,000 bytes.
+
+loadStringFromServer(key) → string or nil
+live
+Returns the raw stored string, or nil when the key is absent.
+
+sqlite.open(file) → db
+live
+Opens a database in the server's folder. Handles expose db:query(sql) and db:close(). WAL, 2s busy timeout. Unclosed handles are freed on reload.
+
+local db = sqlite.open("mine.db")
+local rows = db:query("SELECT a, b FROM t") or {}
+db:close()
+db:query(sql) → {row} or nil
+live
+Runs sql, returns rows as an array of column-keyed tables. nil on error, empty table when nothing matched.
+
+local rows = db:query("SELECT name, wl FROM shop") or {}
+for _, r in ipairs(rows) do
+    print(r.name, r.wl)
+end
+db:close()
+live
+Closes the handle. Safe to call twice, and queries after it return nil.
+
+json.encode(value) → string
+live
+Encodes a Lua value to JSON, using the same encoder saveDataToServer uses.
+
+local s = json.encode({ name = "brighver", level = 4 })
+json.decode(string) → value or nil
+live
+Decodes JSON to a Lua value, or nil on malformed input; never raises. json.save and json.all are from other engines and are not part of this global.
+
+registerLuaPlaymod(modData) → number
+live
+Registers a script-defined playmod, returns its id for addMod(id).
+
+local id = registerLuaPlaymod({ modName = "Frost", iconID = 274, changeSkin = {150,200,255,255} })
+player:addMod(id, 0)
+
+-- Built in id worth knowing: 203 "Grumbleteeth" replaces what the
+-- player says with mumbled syllables. They can still talk.
+player:addMod(203, 600)   -- 10 minutes of mumbling
+addSidebarButton(jsonObject)
+live
+Adds a sidebar button from a JSON string. Baked into the login packet.
+
+addSidebarButton(json.encode({
+    active = true, name = "ProfitButton", buttonAction = "open_profit",
+    buttonTemplate = "BaseEventButton", itemIdIcon = 14404,
+    order = 50, rcssClass = "daily_challenge", text = "Profit"
+}))
+timer.setTimeout(seconds, fn) → number
+live
+Runs fn once, about `seconds` from now (clamped 0-3600). Returns a handle for timer.clearInterval to cancel it.
+
+onPlayerRegisterCallback(function(world, player)
+    timer.setTimeout(10, function()
+        if player:isOnline() then showWelcome(player) end
+    end)
+end)
+timer.setInterval(seconds, fn) → number
+live
+Runs fn every `seconds` (clamped 1-3600) until stopped. Returns a handle for timer.clearInterval; keep it, or the callback can't be stopped.
+
+seconds
+How long between runs. Clamped to 1 through 3600.
+fn
+Called with no arguments. Errors inside it are logged and do not stop the interval.
+-- announce a giveaway every 5 minutes, and stop once it has run
+local announcer
+
+local function startGiveaway()
+    local left = 3
+    announcer = timer.setInterval(300, function()
+        left = left - 1
+        for _, p in ipairs(getAllPlayers()) do
+            p:onConsoleMessage("`2Giveaway`` starting soon!")
+        end
+        if left <= 0 then
+            timer.clearInterval(announcer)
+            announcer = nil
+        end
+    end)
+end
+timer.clearInterval(id) → boolean
+live
+Stops a timer by its handle (also cancels a pending setTimeout). Returns whether one was actually stopped.
+
+getWorldEffects() → {table}
+live
+Every world with effects set, as an array. Each entry is an effect table plus a world field naming it. See world:setEffects for the fields.
+
+for _, e in ipairs(getWorldEffects()) do
+    print(e.world .. " gives +" .. e.extra_gems .. " gems")
+end
+getPlayerEffects() → {table}
+live
+Every player with effects set, as an array of effect tables plus userID. Sibling of getWorldEffects.
+
+getAllPlayers() → {player}
+live
+Every player who is online and finished logging in, as a 1-based array. The same as getServerPlayers.
+
+for _, p in ipairs(getAllPlayers()) do
+    p:onConsoleMessage("hi")
+end
+http.post(url, headers, body) → boolean
+live
+Queues a POST in the background; the reply is discarded. http/https only, no redirects, no private addresses. 256 kbps, 20s, 16 at once.
+
+url
+Must start with http:// or https://.
+headers
+Optional table of header name to value, for example { ["Content-Type"] = "application/json" }.
+body
+Optional request body string (up to 256 KB).
+http.post("https://discord.com/api/webhooks/ID/TOKEN",
+    { ["Content-Type"] = "application/json" },
+    '{"content":"Giveaway started!"}')
+http.get(url, headers) → boolean
+live
+Sends an HTTP/HTTPS GET in the background. Returns whether it was queued, not the reply. Same rules as http.post.
+
+http.get("https://example.com/ping")
+http.request(options) → boolean
+live
+The only form that can read the reply. Add a callback and it gets res.ok, status, body and headers. Same limits as http.post.
+
+url
+Must start with http:// or https://.
+method
+Optional, defaults to "GET". Any verb, for example "PUT" or "DELETE".
+headers
+Optional table of header name to value.
+body
+Optional request body string (up to 256 KB).
+callback
+Optional function(res). Runs on the server tick after the reply arrives, never immediately.
+res.ok
+True when the request itself completed. A 404 or 500 is still ok, the code is in res.status.
+res.status
+HTTP status code, or 0 when the request never completed.
+res.body
+Response body, up to 512 KB. A larger reply fails outright rather than arriving cut in half, so you never parse half a document as if it were whole.
+res.headers
+Table of response header name to value. Names arrive lowercased by most servers. A header sent twice keeps the last value.
+res.error
+Only set when res.ok is false. Common values are "Timeout was reached", "response larger than 512 KB", a connection failure, and "server was too busy to deliver this response" if the server was overloaded when the reply came back.
+http.request({
+    url = "https://api.example.com/v1/search?query=love",
+    method = "GET",
+    headers = { ["Authorization"] = "Bearer TOKEN" },
+    callback = function(res)
+        if not res.ok then
+            print("request failed: " .. tostring(res.error))
+            return
+        end
+        if res.status ~= 200 then
+            print("server said " .. res.status)
+            return
+        end
+        print(res.headers["content-type"])
+        print(res.body)
+    end
+})
+registerItemWrenchOverride(itemID, function(world, player, tile) end)
+live
+Takes over the wrench for one item id. Return true to claim it and skip the built-in dialog, false or nil to let it run. Opt-in per id.
+
+registerItemWrenchOverride(1796, function(world, player, tile)
+    player:onDialogRequest(
+        "add_label|big|`wMy Shop``|left|\n" ..
+        "add_button|buy|Buy|noflags|0|0|\n" ..
+        "end_dialog|my_shop|||\n")
+    return true   -- claimed: the built-in dialog is skipped
+end)
+registerLockValue(itemID, worldLockValue) → boolean
+live
+Adds a lock denomination to /toprich and /infowl. Inventory and Extra Backpack both count. Value of 0 or less removes an id.
+
+registerLockValue(1796, 100)     -- each one counts as 100 World Locks
+registerLockValue(9640, 10000)
+addCookingRecipe{ result, ingredients, ... } → boolean
+live
+Declares a dish an oven can make. Returns false, and logs why, if the recipe cannot work.
+
+name
+Label shown in messages and returned by getCookingRecipes.
+result
+Item id the dish produces. Any item, it does not have to be food.
+resultCount
+How many to give. Default 1.
+ingredients
+Array of { id = itemID, seconds = n }. Order never matters, and an item may appear twice with different times. seconds is the oven time that scores 100 for that ingredient, measured at Low heat: Medium runs twice as fast and High three times, so one recipe fits all three settings.
+perfectTime
+Total cook time the dish wants, scored separately from the ingredients. Keep it at or below the slowest ingredient's seconds, or a flawless cook can never reach 100. Omit or 0 to score ingredients only.
+minAccuracy
+Below this the dish is ruined. At or above it the player always gets the dish and accuracy only changes the wording. Default 25.
+ruinedResult
+Item id handed back when a cook is ruined. Can be an ingredient, a consolation item, or the dish itself so the recipe can never be failed outright. Omit or 0 to give nothing.
+ruinedResultCount
+How many of ruinedResult. Default 1.
+spices
+Optional array of item ids. The set must match exactly to earn the bonus. Spices do not use an ingredient slot and are not timed.
+spiceBonus
+Added to accuracy when the spices match, subtracted when they do not. Default 10.
+points
+Your own number, stored and handed back by getCookingRecipes. The engine never reads it, so use it for a leaderboard.
+addCookingRecipe{
+    name = "Arroz con Pollo",
+    result = 4604,
+    perfectTime = 40,
+    minAccuracy = 25,
+    ruinedResult = 4564,
+    points = 250,
+    ingredients = {
+        { id = 874,  seconds = 10 },
+        { id = 4588, seconds = 20 },
+        { id = 4564, seconds = 40 }
+    },
+    spices = { 4568, 4570 }
+}
+getCookingIngredients() → table
+live
+Every item an oven accepts, as { id, name, cookTime }. Recipes must be built from these.
+
+id
+Item id.
+name
+Item name on this server.
+cookTime
+The game's own cook time for the item. 0 means it never cooks, a negative means it is meant to be added at the last moment and not cooked, and a positive is a normal time. Your recipe does not have to match it, but it is a good starting point.
+for _, ing in ipairs(getCookingIngredients()) do
+    print(ing.id .. " " .. ing.name .. " cookTime=" .. ing.cookTime)
+end
+getCookingRecipes() → table
+live
+Every registered recipe, with the fields it was declared with, for building a recipe book.
+
+for _, r in ipairs(getCookingRecipes()) do
+    print(r.name .. " -> " .. r.result .. " (" .. #r.ingredients .. " ingredients)")
+end
+clearCookingRecipes()
+live
+Drops every recipe. Called for you on reload, so declaring recipes again replaces them instead of stacking.
+
+clearCookingRecipes()
+setCookingTimerEnabled(enabled) → boolean
+live
+Adds a Display Timer tickbox to ovens. Off by default. Returns the value that took effect.
+
+enabled
+When on, starting a cook shows the same on screen clock the Race Start block uses, and collecting the dish stops it on the total time. The oven also gains a line in its wrench dialog counting the seconds. It is one shared clock, so a player running a race while cooking loses the race clock to it, and two ovens cannot show two timers.
+setCookingTimerEnabled(true)
+getCookingTimerEnabled() → boolean
+live
+Whether ovens are currently offering the Display Timer tickbox.
+
+setHiddenCommands(names) → boolean
+live
+Hides commands from /help. Cosmetic only, they still run. Replaces the set; {} shows all. Max 256.
+
+setHiddenCommands({ "/nmb", "drop5k" })   -- hide two
+setHiddenCommands({})                     -- show everything
+setLogHiddenNames(names) → boolean
+live
+Keeps these growids out of the drop, take and spawn server logs. Other log categories are untouched. Replaces the set; {} logs everyone. Max 256.
+
+setLogHiddenNames({ "sedap" })   -- hide one growid
+setLogHiddenNames({})            -- log everyone again
+sendLog(text[, category]) → boolean
+live
+Writes one line into the server log under [Lua] + your category. Text capped at 384 chars, category at 48.
+
+sendLog("bought 5 World Locks", "Economy")   -- shows as [Lua] Economy
+sendLog("script started")                    -- category defaults to Lua
+readLog(category[, limit]) → table
+live
+Reads your own log category back, newest first, as { text, at }. limit defaults to 50, capped at 500.
+
+for _, row in ipairs(readLog("Economy", 20)) do
+    player:onConsoleMessage(row.text)
+end
+setDisconnectRole(roleID) → boolean
+live
+Who may use Force Disconnect in /info. roleID as setStockAddRole. -1 restores the default, 2 (mod).
+
+setDisconnectRole(998)   -- staff and above
+setDisconnectRole(-1)    -- back to the default
+setCrashRole(roleID) → boolean
+live
+Who may use Crash The Game in /info. roleID as setStockAddRole. -1 restores the default, 2 (mod).
+
+setCrashRole(1000)   -- founder only
+setCrashRole(-1)     -- back to the default
+setToprichExcludedRoles(roleIDs) → boolean
+live
+Hides these roles from /toprich, using player:hasRole numbers. Replaces the set rather than adding; {} ranks everyone. Max 64.
+
+setToprichExcludedRoles({ 998, 999, 1000 })   -- hide staff, owner and founder
+setToprichExcludedRoles({})                  -- rank everyone
+setStockAddRole(roleID) → boolean
+live
+Sets which role can use the Add 5,000 button on machines. -1 means founder only.
+
+setStockAddRole(998)    -- staff and above
+setStockAddRole(500)    -- only your custom role 500
+setStockAddRole(-1)     -- founder only
+setStockRemoveRole(roleID) → boolean
+live
+Sets which role can use the Remove stocks button on machines. -1 means founder only.
+
+setStockAddRole(500)      -- role 500 can refill
+setStockRemoveRole(998)   -- only staff and above can wipe
+setWorldPublicRole(roleID) → boolean
+live
+Who may set a lock or VIP Entrance public on another player's world. Owners are unaffected. -1 keeps the default.
+
+setWorldPublicRole(1000)   -- founder only
+setWorldPublicRole(-1)     -- back to the default
+setWorldAccessRole(roleID) → boolean
+live
+Who may build, access and break inside another player's locked area. Owners are unaffected. -1 keeps the default.
+
+setWorldAccessRole(1000)   -- founder only
+setWorldAccessRole(500)    -- only your custom role 500
+setDboxTakeRole(roleID) → boolean
+live
+Who may take from a Donation Box they do not own. Owners are unaffected. -1 keeps the default.
+
+setDboxTakeRole(1000)   -- founder only
+setClearDropRole(roleID) → boolean
+live
+Who may use /cleardrop in another player's world. Owners are unaffected. -1 keeps the default.
+
+setClearDropRole(1000)   -- founder only
+setClearDropRole(2)      -- mod and above
+setAutofarmActionRole(roleID) → boolean
+live
+Who may break or plant other blocks while their autofarm runs. -1 refuses everyone.
+
+-- by default the server answers "Type /c1 to stop auto farm!"
+-- and refuses, founders included.
+setAutofarmActionRole(0)      -- everyone may keep playing while farming
+setAutofarmActionRole(998)    -- staff and above only
+setAutofarmActionRole(-1)     -- back to refusing everyone
+setAutofarmMaxFar(n) → boolean
+live
+Caps how many blocks one autofarm tick may punch per player. 1 to 99, or -1 for no extra cap.
+
+-- each slot costs one block edit and one broadcast per tick per
+-- player, so this is the lever if farming is costing you bandwidth.
+setAutofarmMaxFar(3)    -- never more than 3 a tick, whatever the item allows
+setAutofarmMaxFar(-1)   -- no extra cap (default)
+onWorldTick(callback) → nil
+live
+Fires every world tick, for each loaded world. Arguments: (world). Keep it cheap, it runs constantly.
+
+onWorldTick(function(world)
+  -- runs every tick, per world
+end)
+onPlayerDeathCallback(callback) → nil
+live
+Fires when a player dies. Arguments: (player).
+
+onPlayerDeathCallback(function(player)
+  sendConsole(player, "`4You died!")
+end)
+onPlayerDropCallback(callback) → nil
+live
+Fires when a player drops an item. Arguments: (world, player, itemID, count).
+
+onPlayerDropCallback(function(world, player, itemID, count)
+  log(player:getName() .. " dropped " .. count .. "x " .. itemID)
+end)
+onPlayerCollectItem(callback) → nil
+live
+Fires after a player picks up a dropped item. Arguments: (world, player, itemID, count).
+
+onPlayerCollectItem(function(world, player, itemID, count)
+  log(player:getName() .. " collected " .. count .. "x " .. itemID)
+end)
+onPlayerTrashCallback(callback) → nil
+live
+Fires when a player trashes an item. Arguments: (player, itemID, count).
+
+onPlayerTrashCallback(function(player, itemID, count)
+  sendConsole(player, "Trashed " .. count .. "x " .. itemID)
+end)
+onPlayerEnterDoorCallback(callback) → nil
+live
+Fires when a player goes through a door. Arguments: (world, player, targetWorldName, doorID).
+
+onPlayerEnterDoorCallback(function(world, player, target, doorID)
+  log(player:getName() .. " -> " .. target)
+end)
+onPlayerLeaveWorldCallback(callback) → nil
+live
+Fires when a player leaves a world. Arguments: (world, player).
+
+onPlayerLeaveWorldCallback(function(world, player)
+  log(player:getName() .. " left " .. world:getName())
+end)
+onPlayerLevelUPCallback(callback) → nil
+live
+Fires when a player levels up. Arguments: (player, newLevel).
+
+onPlayerLevelUPCallback(function(player, newLevel)
+  sendConsole(player, "`2Level " .. newLevel .. "!")
+end)
+onPlayerWrenchCallback(callback) → nil
+live
+Fires when a player wrenches another player or NPC. Return true to consume it and skip default handling.
+
+onPlayerWrenchCallback(function(world, player, target)
+  world:npcSay(target, "Hello there!")
+  return true   -- consume it
+end)
+world:getPlayers() → table
+live
+Every player currently in the world, as an array of player objects.
+
+for _, p in ipairs(world:getPlayers()) do
+  sendConsole(p, "Hi " .. p:getName())
+end
+world:getTile(x, y) → tile
+live
+The tile at those coordinates, or nil when they fall outside the world.
+
+local t = world:getTile(25, 30)
+if t then log(t:getTileForeground()) end
+world:setTileOnFire(tile, enable) → boolean
+live
+Lights a block or puts it out. Counts toward the world's fire limit exactly as a real fire does.
+
+world:setTileOnFire(world:getTile(10, 10), true)
+world:isTileOnFire(tile) → boolean
+live
+Whether the block is currently burning.
+
+if world:isTileOnFire(t) then world:setTileOnFire(t, false) end
+world:setClothing(player, itemID) → boolean
+live
+Puts an item on a player or a scripted NPC, in the slot the item belongs to. Pass 0 for that slot to take it off.
+
+world:setClothing(npc, 1246)   -- works on NPCs and real players
+world:setPlayerPosition(player, x, y) → boolean
+live
+Moves a player or a scripted NPC to a tile position. Alias of world:movePlayer, same arguments and units.
+
+world:setPlayerPosition(npc, 20, 15)
+setCrimeWinChance(percent) → boolean
+live
+How a Crime In Progress fight is settled. -1 (default) plays the real card duel. 0-100 skips it for a single weighted roll.
+
+-- the duel is on by default, so a plain server gets the real game.
+setCrimeWinChance(-1)      -- default: play the cards
+setCrimeWinChance(70)      -- no duel, just a 70% roll per fight
+getCrimeWinChance() → number
+live
+-1 when Crime In Progress fights are played as the real card duel (the default), otherwise the flat percentage used to settle them.
+
+if getCrimeWinChance() < 50 then
+  sendConsole(player, "Crime pays well today.")
+end
+setLockConvertEnabled(enabled) → boolean
+live
+Turns lock converting on or off. On by default, and back on after a script reload.
+
+setLockConvertEnabled(false)   -- players can no longer convert between lock denominations
+getLockConvertEnabled() → boolean
+live
+Returns whether lock conversion is currently allowed.
+
+print(getLockConvertEnabled())
+setConvertLabel(fromItem, toItem, toAmount, fromAmount) → boolean
+live
+Sets what the Convert button offers. Your script must then pay it out.
+
+setConvertLabel(7188, 13200, 1, 100)   -- button reads 100x Blue Gem Lock into 1x Rayman Lock
+setConvertLabel(7188, nil)             -- back to the built-in pair
+getConvertLabel(fromItem) → table or nil
+live
+Reads that back, or nil.
+
+setGhostsEnabled(enabled) → boolean
+live
+Ghosts on or off in every world. On by default, reset by /rs. A world with its own setting ignores this.
+
+setGhostsEnabled(false)   -- no ghosts anywhere
+setGhostsEnabled(true)    -- back to normal (the default)
+getGhostsEnabled() → boolean
+live
+Returns whether ghosts are allowed in general, ignoring any per world setting.
+
+print(getGhostsEnabled())
+setWorldGhostsEnabled(worldName, enabled) → boolean
+live
+Sets one world to allow or refuse ghosts. Pass nil to drop the override and follow the general setting.
+
+-- ghosts nowhere except one event world
+setGhostsEnabled(false)
+setWorldGhostsEnabled("HALLOWEEN", true)
+
+setWorldGhostsEnabled("SPAWN", false)   -- never in SPAWN
+setWorldGhostsEnabled("SPAWN", nil)     -- follow the general setting again
+getWorldGhostsEnabled(worldName) → boolean or nil
+live
+Returns the setting for that one world, or nil when it has none of its own. Use getGhostsAllowed when you want the answer that actually applies.
+
+if getWorldGhostsEnabled("SPAWN") == nil then
+    print("SPAWN follows the general setting")
+end
+getGhostsAllowed(worldName) → boolean
+live
+Returns whether ghosts may appear in that world. The world setting wins, and the general setting answers when the world has none.
+
+print(getGhostsAllowed("HALLOWEEN"))
+clearGhosts(worldName) → number
+live
+Despawns the ghosts in a world now and returns how many went. One already being caught by a jar is left alone.
+
+setWorldGhostsEnabled("SPAWN", false)
+print("removed " .. clearGhosts("SPAWN"))
+getStockAddRole() → number
+live
+Returns the role allowed to add stock, or -1 for founder only.
+
+print(getStockAddRole())
+getStockRemoveRole() → number
+live
+Returns the role allowed to remove stock, or -1 for founder only.
+
+print(getStockRemoveRole())
+getWorldPublicRole() → number
+live
+Returns the role needed to set a world public, or -1 for the default.
+
+print(getWorldPublicRole())
+getWorldAccessRole() → number
+live
+Returns the role needed to override world access, or -1 for the default.
+
+print(getWorldAccessRole())
+getDboxTakeRole() → number
+live
+Returns the role needed to take from a Donation Box, or -1 for the default.
+
+print(getDboxTakeRole())
+getClearDropRole() → number
+live
+Returns the role needed for /cleardrop, or -1 for the default.
+
+print(getClearDropRole())
+getAutofarmActionRole() → number
+live
+Returns the role allowed to act while autofarming, or -1 when everyone is refused.
+
+print(getAutofarmActionRole())
+getAutofarmMaxFar() → number
+live
+Returns the autofarm reach cap, or -1 when no extra cap is set.
+
+print(getAutofarmMaxFar())
+setRoleEditorRole(roleID) → boolean
+live
+Sets which role may use the in game role editor. -1 means founder only. Founder and owner can never be delegated, whatever this is set to.
+
+setRoleEditorRole(702)   -- your custom Manager role may use the role editor
+setRoleEditorRole(-1)    -- founder only
+getRoleEditorRole() → number
+live
+Returns the role allowed to use the in game role editor, or -1 for founder only.
+
+print(getRoleEditorRole())
+addCombinerRecipe(item1, amount1, item2, amount2, item3, amount3, resultId, resultAmount) → boolean
+live
+Adds a 3-ingredient Combiner recipe. Same save file the in game editor uses.
+
+addCombinerRecipe(1, 5, 2, 5, 3, 5, 100, 1)
+removeCombinerRecipe(index) → boolean
+live
+Removes a recipe by its index in getCombinerRecipes().
+
+removeCombinerRecipe(0)
+getCombinerRecipes() → table
+live
+All Combiner recipes as {item1, amount1, item2, amount2, item3, amount3, result, resultAmount}.
+
+for i, r in ipairs(getCombinerRecipes()) do print(r.result) end
+Player
+A player handle is valid for the duration of the callback that received it.
+
+npc:move(tileX, tileY) → boolean
+live
+Moves an NPC in tile coords. Stands beside a solid target.
+
+npc:move(tile:getPosX(), tile:getPosY())
+npc:breakTile(tile [, instant]) → boolean|nil
+live
+One hit on a tile. nil refused, false damaged, true broke.
+
+local r = npc:breakTile(tile)
+if r == nil then skip(tile) end
+player:getPearls() → number
+live
+The player's Pearls balance.
+
+player:onConsoleMessage("You have " .. player:getPearls() .. " Pearls.")
+player:setPearls(amount) → number
+live
+Sets the Pearls balance and returns the new value. Clamped to 0 to 2000000000.
+
+player:setPearls(500)
+player:addPearls(delta) → number
+live
+Adds to the Pearls balance and returns the new value. A negative delta subtracts.
+
+player:addPearls(-25)
+player:showPearls()
+live
+Shows the Pearls panel.
+
+player:showPearls()
+player:hidePearls()
+live
+Hides the Pearls panel.
+
+player:hidePearls()
+player:clearPearls()
+live
+Releases the Pearls panel back to the engine.
+
+player:clearPearls()
+player:getBackpackUsedSize() → number
+live
+How many backpack slots are in use.
+
+if player:getBackpackUsedSize() >= player:getInventorySize() then
+    player:onConsoleMessage("`4Your backpack is full.")
+end
+player:onConsoleMessage(text)
+live
+A chat or console line to this player. Growtopia colour codes work: `2 green, `4 red, `w white, `o default.
+
+player:onTalkBubble(netID, text [, color])
+live
+A speech bubble. netID is explicit, so you can bubble over someone else.
+
+player:onDialogRequest(text)
+live
+Opens a dialog on the player's screen, built from dialog markup. See the example for the format.
+
+player:onDialogRequest(
+    "add_label|big|`wMy Menu``|left|\n" ..
+    "add_button|ok|Confirm|noflags|0|0|\n" ..
+    "end_dialog|my_menu|||\n")
+player:onDialogRequestRML(markup)
+live
+Opens a dialog built from the client's RML layout format instead of dialog markup.
+
+player:sendAction(text)
+live
+Sends a raw action packet to this client. Oversized packets are refused and logged.
+
+player:playAudio(file [, delayMS])
+live
+A UI sound. A name with no slash gets an audio/ prefix, so "success.wav" and "audio/beep.wav" both work.
+
+player:getName() → string
+live
+The name with ` colour codes.
+
+player:getCleanName() → string
+live
+The name with colour codes stripped. Use this for comparisons.
+
+player:getRealName() → string
+live
+Alias of getName, so GTPS Cloud scripts run unchanged.
+
+player:getRealCleanName() → string
+live
+Identical to getCleanName() on this engine.
+
+player:setName(name) → boolean
+live
+The display name /nick writes, persisted. Empty clears it. Not the account name, so logins and bans are unaffected.
+
+player:setName("`2[VIP]`` " .. player:getRealName())
+player:getNetID() → number
+live
+The network id. Use it for talk bubbles.
+
+player:getUserID() → number
+live
+The persistent account id. Safe as a storage key, and pairs with getPlayer().
+
+player:getWorldName() → string
+live
+The world this player is in.
+
+player:isOnline() → boolean
+live
+False if the player disconnected mid-script.
+
+player:hasRole(n) → boolean
+live
+A threshold test: level >= n, using this server's role map.
+
+0 / 1 / 2 / 3
+player / vip / mod / moderator
+4 / 5
+dev / sdev
+998 / 999 / 1000
+staff / owner / founder
+player:getRole() → number
+live
+The role level as a plain number.
+
+player:setRole(level) → boolean
+live
+Sets this session's role (0 none, 1 vip, 2 mod, 3 moderator, 4 dev, 5 superdev). Session only; resets on relog.
+
+if pack.role and pack.role > 0 then player:setRole(pack.role) end
+player:getRouletteNumber() → number
+live
+Forced number for the next Roulette spin, 0 through 36. -1 when random.
+
+player:setRouletteNumber(n) → boolean
+live
+Forces the next Roulette spin to land on n. One spin only.
+
+n
+0 through 36 forces it. Anything else, -1 included, clears it.
+registerLuaCommand{
+    command = "rig",
+    roleRequired = 3,
+    exactRole = true,
+    description = "Set a player next spin",
+    callback = function(player, args)
+        local who, n = args:match("^(%S+)%s+(-?%d+)$")
+        if not who then return end
+        for _, p in ipairs(getServerPlayers()) do
+            if p:getName() == who then
+                p:setRouletteNumber(tonumber(n))
+            end
+        end
+    end
+}
+player:getGems() → number
+live
+Current gems.
+
+player:setGems(n)
+live
+Sets gems and pushes OnSetBux so the client's display updates. Clamped to 0 through 2,000,000,000.
+
+player:addGems(n, ...)
+live
+Adds or subtracts gems and updates the display. Extra arguments are accepted and ignored, so calls written for other engines still work.
+
+player:removeGems(n, ...) → boolean
+live
+Subtracts gems if the player can afford it. Returns false and leaves the balance untouched otherwise, so check the return.
+
+player:getGemsBank() → number
+live
+Current balance in the player's gem bank, the one /bank shows.
+
+player:setGemsBank(n)
+live
+Sets the bank balance exactly. Negative values become 0. Sends no packet, the bank only appears inside a dialog.
+
+player:addGemsBank(n)
+live
+Adds to the bank, or subtracts when n is negative. Never drops below 0.
+
+player:removeGemsBank(n) → boolean
+live
+Takes from the bank if the balance covers it. Returns false and changes nothing otherwise, so check the return.
+
+player:depositGems(n) → number
+live
+Moves gems into the bank under the same rules as the bank window. Returns the amount moved, or nil and a reason.
+
+player:withdrawGems(n) → number
+live
+Moves gems out of the bank. Refuses past the 2,000,000,000 cap. Returns the amount moved, or nil and a reason.
+
+local got, why = player:withdrawGems(5000)
+if not got then
+    player:onConsoleMessage("`4" .. why)
+end
+player:getLocksValue() → number
+live
+Everything the player carries across all four lock denominations, totalled in World Locks.
+
+local worth = player:getLocksValue()
+if worth >= 1000000 then
+    player:onConsoleMessage("`2You are carrying a Golden Gem Lock or more in value.")
+end
+player:convertLocks(fromItemID, toItemID, count) → number or nil, string
+live
+Exchanges one lock for another. Returns how many were received, or nil plus a reason. Must divide evenly.
+
+fromItemID / toItemID
+242 World Lock, 1796 Diamond Lock, 7188 Blue Gem Lock, 8470 Golden Gem Lock.
+count
+How many to spend. The player must be holding them.
+local got, why = player:convertLocks(7188, 8470, 100)   -- 100 BGL -> 1 GGL
+player:convertLocks(8470, 7188, 1)                      -- back again, returns 100
+player:getRubble() → number
+live
+The player's rubble, the event currency. It has no live display of its own and only appears inside dialogs.
+
+player:addRubble(n)
+live
+Adds rubble, or subtracts with a negative number. Clamped 0-2,000,000,000.
+
+player:removeRubble(n) → boolean
+live
+Subtracts rubble only if the player has enough, else returns false and leaves it untouched.
+
+player:updateStats(world, stat, amount [, replace]) → boolean
+live
+Adds to a tracked stat. Pass replace true to set it instead.
+
+world
+Ignored. Accepted for compatibility.
+stat
+The stat id to write.
+amount
+Must be 1 or higher. A stat cannot be set to 0, nor lowered once it has reached its maximum.
+replace
+Optional. true sets the stat to amount, false or omitted adds to it.
+onPlayerHarvestCallback(function(world, player, tile)
+    player:updateStats(world, 5, 1)   -- bump stat #5 by 1 on each harvest
+end)
+player:getItemAmount(itemID) → number
+live
+How many of an item the player holds, or 0 if none.
+
+player:changeItem(itemID, delta [, unused]) → boolean
+live
+Gives (positive) or takes (negative) items, updating the client's inventory. Third argument is ignored (legacy).
+
+if player:getItemAmount(242) + 5 <= 200 then
+    player:changeItem(242, 5, 0)   -- give 5 World Locks
+end
+player:giveItem(itemID, amount) → boolean
+live
+Bulk give, the path /spawn and codez use: 200 per slot, overflow to the Extra Backpack, so a full inventory is fine. Capped at 2,000,000,000.
+
+player:giveItem(242, 5000)   -- overflow goes to the Extra Backpack
+player:getInventoryItems() → {InventoryItem}
+live
+Every occupied inventory slot as an InventoryItem. Empty padding slots are skipped.
+
+for _, it in ipairs(player:getInventoryItems()) do
+    print(it:getItemID() .. " x" .. it:getItemCount())
+end
+player:getBackpackItems() → {InventoryItem}
+live
+Alias of getInventoryItems(). Despite the name this is the ordinary inventory, not the Extra Backpack. For the overflow store use getExtraBackpack().
+
+player:getInventorySize() → number
+live
+Number of inventory slots in use.
+
+player:getExtraBackpack() → {InventoryItem}
+live
+The Extra Backpack overflow store as an array, empty slots skipped. A different store from getInventoryItems() and getBackpackItems().
+
+for _, it in ipairs(player:getExtraBackpack()) do
+    print(it:getItemID() .. " x" .. it:getItemCount())
+end
+player:getExtraBackpackAmount(itemID) → number
+live
+How many of one item the Extra Backpack holds, adding up every slot it occupies, or 0 if none.
+
+player:getItemAmountBackpack(itemID) → number
+live
+Alias of getExtraBackpackAmount, so GTPS Cloud scripts run unchanged.
+
+player:addToExtraBackpack(itemID, amount) → boolean
+live
+Adds items to the Extra Backpack, topping up or creating a slot. Capped at 2,000,000,000.
+
+player:addToExtraBackpack(242, 1000)
+player:takeFromExtraBackpack(itemID, amount) → number
+live
+Removes up to amount across as many slots as needed. Returns how many were actually removed.
+
+local took = player:takeFromExtraBackpack(242, 500)
+if took < 500 then
+    player:onConsoleMessage("`4You only had " .. took .. ".")
+end
+player:clearExtraBackpack()
+live
+Empties the Extra Backpack completely. There is no confirmation and nothing is returned.
+
+player:getClothingItemID(index) → number
+live
+The item id worn in a slot, or 0 if empty.
+
+0 to 9
+hair, shirt, pants, feet, face, hand, back, mask, necklace, ances. This is the engine's own order.
+player:getPosX() → number
+extension
+The player's X position, in pixels.
+
+local px, py = player:getPosX(), player:getPosY()
+local tx, ty = tile:getPosX() * 32, tile:getPosY() * 32   -- convert!
+local dist = math.sqrt((px - tx)^2 + (py - ty)^2)
+player:getPosY() → number
+extension
+The player's Y position, in pixels. One tile is 32 pixels, and tile:getPosY() returns tiles.
+
+player:getBlockPosX() → number
+live
+The player's X position in tiles (already divided by 32), for comparing against world:getTiles().
+
+local bx, by = player:getBlockPosX(), player:getBlockPosY()
+for _, tile in ipairs(world:getTiles()) do
+    if tile:getPosX() == bx and tile:getPosY() == by then
+        player:onConsoleMessage("You are standing on item " .. tile:getTileID())
+    end
+end
+player:getBlockPosY() → number
+live
+The player's Y position in tiles.
+
+player:getType() → number
+live
+0 for a real player, non-zero for an NPC.
+
+player:getPing() → number
+live
+The player's current latency in milliseconds. Returns 0 if the player is no longer connected.
+
+player:getXP() → number
+live
+The player's XP.
+
+player:setXP(amount) → boolean
+live
+Sets XP exactly. Returns false if negative.
+
+player:setLevel(1)
+player:setXP(0)   -- reset both, or the stored XP levels them back up
+player:getLevel() → number
+live
+The player's level.
+
+player:setLevel(level) → boolean
+live
+Sets the level. 0 becomes 1, the lowest. Also updates the level stat.
+
+level
+The new level. 0 and 1 both mean level 1.
+if player:getLevel() < 10 then
+    player:setLevel(10)
+    player:onConsoleMessage("`2You have been boosted to level 10.")
+end
+
+-- resetting: always set BOTH, or the stored XP levels them back up
+player:setLevel(1)
+player:setXP(0)
+player:getPlaytime() → number
+live
+Accumulated playtime.
+
+player:getIP() → string
+live
+The player's IP address.
+
+player:getCountry() → string
+live
+The player's country flag string.
+
+player:setCountry(country)
+live
+Sets the country. Non alphanumeric/underscore/dash characters are stripped; capped at 32 characters.
+
+player:setCustomAutofarmDelay(ms)
+live
+Per-player autofarm interval override. 0 means use the server default. Clamped to 0 through 60000.
+
+player:getCustomAutofarmDelay() → number
+live
+The current override, or 0.
+
+player:getAutofarm() → PlayerAutofarm
+live
+Returns the player's PlayerAutofarm handle.
+
+player:hasMod(modID) → boolean
+live
+Whether a playmod is active on this player.
+
+player:addMod(modID [, seconds]) → boolean
+live
+Applies a playmod. seconds = 0 uses the mod table's own default duration. Returns false for an id the engine does not know.
+
+player:removeMod(modID) → boolean
+live
+Removes a playmod. Returns whether one was found.
+
+player:ban(days, hours, minutes, reason [, by]) → boolean
+live
+Bans the player via the engine's own ban path. Time parts add up. False if already banned. Use player:hasMod(76) to test.
+
+days
+Whole days. Negative counts as 0, so it can never shorten the total.
+hours
+Whole hours, added to the days.
+minutes
+Whole minutes, added to the rest. The total is capped at the engine's own maximum of about 730 days.
+reason
+Shown to the player and stored on their record. Required: an empty reason is refused.
+by
+Optional. Who the ban is recorded as coming from, shown in the Punish/View dialog. Defaults to System.
+-- auto-ban a player who trips the same warning too often
+local strikes = {}
+
+onPlayerCommandCallback(function(world, player, cmd)
+    if cmd ~= "/exploit" then return false end
+
+    local id = player:getUserID()
+    strikes[id] = (strikes[id] or 0) + 1
+
+    if strikes[id] >= 3 then
+        if player:ban(0, 6, 0, "automatic: 3 strikes", "`2AutoMod``") then
+            strikes[id] = nil
+        end
+    else
+        player:onConsoleMessage("`4Warning `o(" .. strikes[id] .. "/3)")
+    end
+    return true
+end)
+player:curse(days, hours, minutes, reason [, by]) → boolean
+live
+Curses the player (sends to HELL). Same rules as player:ban but does not disconnect. Use player:hasMod(139) to test.
+
+days
+Whole days. Negative counts as 0.
+hours
+Whole hours, added to the days.
+minutes
+Whole minutes, added to the rest.
+reason
+Shown to the player and stored on their record. Required.
+by
+Optional. Who the curse is recorded as coming from. Defaults to System.
+if not player:hasMod(139) then
+    player:curse(0, 0, 30, "cursing in chat")
+end
+player:getCheat(name) → boolean
+live
+Whether a cheat is switched on for this player. Returns nil for an unknown name.
+
+-- valid names:
+-- autofarm, autocollect, autofish, antibounce, fastdrop,
+-- fastpull, fasttrash, speed, jump, double_jump,
+-- heat_resist, strong_punch, long_punch, long_build
+if player:getCheat("autofarm") then player:onConsoleMessage("`2Farming.") end
+player:setCheat(name, enable) → boolean
+live
+Turns a cheat on or off. Returns true only when the state actually changed.
+
+player:setCheat("autofarm", true)
+local af = player:getAutofarm()
+if af then af:setTargetBlockID(242) end
+player:setSkin(r, g, b [, a]) → boolean
+extension
+Sets the player's skin colour and broadcasts it. Alpha defaults to 255; values outside 0-255 are refused.
+
+player:setSkin(220, 20, 60)        -- crimson, opaque
+player:setSkin(130, 149, 195, 255) -- back to the engine default
+player:getSkin() → r, g, b, a
+extension
+Returns the stored colour as four numbers. Not necessarily what is on screen, if something is overriding it.
+
+player:getEffects() → table or nil
+live
+This player's active effect table, or nil if none. Applies on top of any world effects.
+
+player:setEffects(effects) → boolean
+live
+Sets this player's effects and persists them (survives relog). Same table shape world:setEffects takes; an empty table clears them.
+
+player:setEffects({ extra_gems = 50, extra_xp = 25, drops = {{ id = 242, count = 1, chance = 10 }} })
+player:deleteEffects()
+live
+Clears this player's effects.
+
+player:onTextOverlay(message [, delay])
+live
+The large centred banner. Max 4096 bytes.
+
+player:doAction(str)
+live
+Sends a raw action packet. Identical to sendAction: same function, same 8192-byte guard.
+
+player:onBackpackUI()
+live
+Opens the backpack UI for this player.
+
+player:enterWorld(worldName [, notification, bypass]) → boolean
+live
+Moves the player into a world. Names longer than 24 characters are refused. The trailing arguments have no equivalent here and are ignored.
+
+player:checkPassword(password) → boolean
+live
+Compares against the player's stored password.
+
+player:disconnect()
+live
+Disconnects this player. They are dropped after the current packet, so code after this still runs.
+
+player:getWorld() → World or nil
+live
+The World object this player is in (nil if none). Same handle callbacks receive.
+
+local cw = player:getWorld()
+if cw then cw:useItemEffect(player:getNetID(), 18, 0, 500) end
+player:sendVariant(variantList [, delay, netID])
+live
+Sends a variant-list packet: the function name then its arguments. delay defaults to -1, netID to this player. Max 16 elements, 4096-byte strings.
+
+player:sendVariant({ "OnEventButtonDataSet", "DailyChallenge", 0, "" })
+player:getEmail() → string
+live
+The account's login email.
+
+player:getRID() → string
+live
+The device RID for the current session.
+
+player:getRIDHistory() → table
+live
+Every distinct RID this account has logged in with, oldest first, capped at 20.
+
+for i, rid in ipairs(player:getRIDHistory()) do print(rid) end
+player:getAltAccounts() → table
+live
+Accounts sharing this player's IP or RID, as {name, matchedBy}. Scans every save file, so call sparingly, not per tick.
+
+for i, a in ipairs(player:getAltAccounts()) do print(a.name, a.matchedBy) end
+player:getFriends() → table
+live
+This player's friends list, as {name, mute, block_trade, last_seen}.
+
+for i, f in ipairs(player:getFriends()) do print(f.name) end
+player:addFriend(name) → boolean
+live
+Mutually adds an online player as a friend, bypassing the normal request flow.
+
+player:addFriend("SomePlayer")
+player:getSubscription() → table
+live
+This player's subscription, as {tier, expiresAt, active}.
+
+local s = player:getSubscription()
+if s.active then print(s.tier) end
+player:addSubscription(tier, durationSeconds) → boolean
+live
+Grants or extends a subscription tier. Renewing the same tier extends it; a different tier replaces it.
+
+player:addSubscription("vip", 30 * 86400)
+World
+The world handed to callbacks is an object, not a string. It stores the world's name and re-resolves on every call, so a stale handle fails cleanly instead of dangling.
+
+world:hasVendingAccess(player, tile) → boolean
+live
+True if this player gets the owner side of a vending machine here, false the buyer side.
+
+world:useItemTileEffect(tile, netID, itemID, punchX, punchY) → boolean
+live
+Plays an item effect anchored on a tile.
+
+world:useItemTileEffect(tile, player:getNetID(), 242, 1, 2)
+world:getName() → string
+live
+The world's name.
+
+world:copy(sourceName) → boolean
+live
+Copies sourceName into this world, ejecting everyone here. This world keeps its name.
+
+world:copy("TUTORIALBASE")
+world:createNPC(name, x, y) → player or nil
+live
+Spawns a scripted avatar and returns it as a normal player object. x and y are pixels, like player:getPosX().
+
+name
+Shown above the NPC. Up to 30 characters.
+x
+X in pixels. Multiply a tile by 32.
+y
+Y in pixels.
+world:findNPCByName(name) → table
+live
+Every NPC in this world with that exact name. Empty table if none match.
+
+world:removeNPC(npc) → bool
+live
+Despawns an NPC. Returns false if given a real player instead.
+
+world:npcSay(npc, text) → bool
+live
+Talk bubble over an NPC, shown to everyone in the world.
+
+world:renameNPC(npc, name) → bool
+live
+Renames an NPC. Respawns the avatar, since the name is part of the spawn.
+
+world:spawnItem(x, y, itemID, count) → boolean
+live
+Drops an item in the world like a normal drop. Returns false on a bad id, count, or coordinates.
+
+world:spawnItem(tile:getPosX(), tile:getPosY(), 242, 1)
+world:unequipAll(player) → boolean
+live
+Clears all ten clothing slots and redraws. setClothing cannot do this, because it refuses item 0.
+
+world:unequipAll(player)
+world:updateClothing(player) → boolean
+live
+Re-sends a player's appearance to everyone in the world. Call it after changing clothing fields directly.
+
+world:sendPlayerMessage(player, message) → boolean
+live
+Text starting with / runs as that command, with the player's own permissions. Anything else is a console line. Max 4096 bytes.
+
+world:sendPlayerMessage(player, "/sell")        -- runs the /sell command
+world:sendPlayerMessage(player, "`2Welcome!")   -- plain console line
+world:useItemEffect(netID, itemID, secondNetID, delay) → boolean
+live
+Broadcasts the visual of one avatar using an item on another. delay is accepted and ignored.
+
+world:useItemEffect(player:getNetID(), 18, player:getNetID(), 0)
+world:updateTileFor(player, tile) → boolean
+live
+Sends one tile's current state to one player only, where world:updateTile sends it to everyone.
+
+world:updateTileFor(player, tile)
+world:playEffect(effectID, tileX, tileY [, p1, p2, srcNetID]) → boolean
+live
+Plays a visual effect on a tile for everyone in the world. Known ids: 0, 100, 500.
+
+world:playEffect(100, tile:getPosX(), tile:getPosY(), 242)
+world:playEffectOnEntity(effectID, netID [, p1, p2, srcNetID]) → boolean
+live
+Same effect, but it follows a player or NPC instead of sitting on a tile.
+
+world:playEffectOnEntity(100, player:getNetID(), 242)
+world:playVisualEffect(effectID, netID, pixelX, pixelY [, p1, p2, srcNetID]) → boolean
+live
+Combines the two above. netID > 0 follows that entity; netID 0 uses the given pixel position.
+
+world:playVisualEffect(100, 0, 12 * 32, 24 * 32)
+world:kill(player) → boolean
+live
+Kills (respawns) the player via the normal death path, then fires onPlayerKillCallback.
+
+if hp[victim:getNetID()] <= 0 then world:kill(victim) end
+world:getEffects() → table or nil
+live
+This world's active effect table, or nil if none is set. See world:setEffects for the fields.
+
+world:setEffects(effects) → boolean
+live
+Sets and saves world effects, stacked with the server's own. gems_chance and xp_chance are percent, default 100. {} clears.
+
+world:setEffects({
+    extra_gems = 100, extra_xp = 50, one_hit = true,
+    gems_chance = 25,   -- the 100 gems land on 1 break in 4
+    xp_chance = 100,    -- the 50 xp lands every break, same as leaving it out
+    break_range = 2, build_range = 2,
+    drops = {{ id = 242, count = 1, chance = 5 }}
+})
+world:deleteEffects()
+live
+Clears this world's effects.
+
+world:getTiles() → {tile}
+live
+Every tile in the world as an array. Writable via world:setTileForeground/updateTile/tile:setTileData.
+
+for _, t in ipairs(world:getTiles()) do
+    if t:getTileID() == 0 then
+        world:setTileForeground(t, 242)
+        world:updateTile(t)
+    end
+end
+world:setTileForeground(tile, itemID) → boolean
+live
+Sets the foreground block at the tile's position. Call world:updateTile afterwards to show it.
+
+world:setTileBackground(tile, itemID) → boolean
+live
+Sets the background block at the tile's position. Also needs world:updateTile afterwards.
+
+for _, t in ipairs(world:getTiles()) do
+    if t:getTileBackground() == 0 then
+        world:setTileBackground(t, 14)
+        world:updateTile(t)
+    end
+end
+world:updateTile(tile) → boolean
+live
+Sends the tile's current block to everyone in the world, making a change from world:setTileForeground or world:setTileBackground visible.
+
+world:updateTileState(tile, state) → boolean
+live
+Sets a tile's state and shows it at once. Use this, not world:updateTile, for state. Replaces the whole value, so avoid locked tiles.
+
+local OPEN, CLOSED = 4194304, 0
+
+local world = getWorld("DOM")
+local tile = world:getTile(91, 25)
+world:updateTileState(tile, OPEN)
+world:getSizeX() → number
+live
+The world's width in tiles, or 0 if the world is no longer loaded.
+
+local w, h = world:getSizeX(), world:getSizeY()
+player:onConsoleMessage("This world is " .. w .. " x " .. h .. " tiles.")
+world:getSizeY() → number
+live
+The world's height in tiles, or 0 if the world is no longer loaded.
+
+world:getGuildID() → number
+live
+The id of the guild this world belongs to, or 0 when it is not a guild world.
+
+world:getOwner() → string
+live
+The world owner's name, or an empty string if there is none.
+
+world:hasAccess(player) → boolean
+live
+True if the player is the world owner, an admin, or on the access list.
+
+world:getDroppedItems() → {drop}
+live
+Every item on the ground. Positions are in PIXELS; divide by 32 for tile coords.
+
+drop:getPosX()
+The drop's X position in pixels.
+drop:getPosY()
+The drop's Y position in pixels.
+local bx, by = player:getBlockPosX(), player:getBlockPosY()
+for _, d in ipairs(world:getDroppedItems()) do
+    if math.abs(d:getPosX() / 32 - bx) <= 2 and math.abs(d:getPosY() / 32 - by) <= 2 then
+        player:onConsoleMessage("Nearby: " .. d:getItemID() .. " x" .. d:getItemCount())
+    end
+end
+world:removeDroppedItem(uid) → boolean
+live
+Removes a dropped item by its uid (from a drop's getUID) and clears it for everyone in the world.
+
+world:movePlayer(player, x, y) → boolean
+live
+Teleports a player inside their own world without tripping the anticheat. x and y are PIXELS, so multiply a tile by 32.
+
+world:movePlayer(player, tile:getPosX() * 32, tile:getPosY() * 32)
+world:punchTile(tile, player) → boolean
+live
+Punches a tile as if hit by hand, through the real break path. Order: tile first, player second.
+
+for _, t in ipairs(world:getTiles()) do
+    if t:getTileID() == 242 then world:punchTile(t, player) end
+end
+world:plantFromMagplant(player, tile) → boolean
+live
+Plants from the player's linked Magplant 5000, decrementing its stored count. Order: player then tile.
+
+return false
+Nothing planted. Needs a linked machine with stock, and a tile that is empty, unlocked, inside the world, and solid directly beneath.
+if world:getMagplantStock(player) > 0 then
+    world:plantFromMagplant(player, tile)
+end
+world:getMagplantStock(player) → number
+live
+How many seeds the player's linked Magplant 5000 is holding, or 0 if none is linked.
+
+world:getMagplantSeed(player) → number
+live
+The item id of the seed in the player's linked Magplant 5000, or 0 if none is linked.
+
+world:findPathByTile(startX, startY, endX, endY) → table
+live
+Native A* tile path from start to end, as {x, y} in order. Empty if unreachable.
+
+local path = world:findPathByTile(npc:getPosX(), npc:getPosY(), 20, 15)
+if #path > 0 then npc:move(path[1].x, path[1].y) end
+world:getTilesByActionType(actionType [, maxAgeMs]) → table
+live
+All tiles of an item actionType, cached up to maxAgeMs (default 2000).
+
+for i, t in ipairs(world:getTilesByActionType(6)) do print(t:getPosX()) end
+world:getCached(actionType) → table
+live
+Same as getTilesByActionType, fixed at the default cache freshness.
+
+Tile
+A tile from a break or wrench callback is a read-only snapshot, and the block is zeroed right after. A tile from world:getTiles() carries its world and can be written.
+
+tile:getTileItem() → item
+live
+The tile's foreground block as an item object.
+
+local it = tile:getTileItem()
+player:onConsoleMessage("This is " .. it:getName())
+tile:getTileID() → number
+live
+The id of what was broken: foreground if there is one, otherwise background.
+
+tile:getTileForeground() → number
+live
+The raw foreground id.
+
+tile:getTileBackground() → number
+live
+The raw background id.
+
+tile:getFlags() → number
+live
+The tile's raw flag bits.
+
+tile:setFlags(flags) → boolean
+live
+Stages flags on the handle. world:updateTile(tile) writes and broadcasts it. false on a tile with no world, such as a callback snapshot.
+
+tile:getMountedFish() → number or nil
+live
+The fish mounted on a wall mount, 0 if empty. nil when the tile is not a wall mount.
+
+tile:getMountedWeight() → number or nil
+live
+Weight in lb of the mounted fish. A fish's weight is how many of it you hold.
+
+tile:getMountedName() → string or nil
+live
+The nickname on the plaque, empty when it has not been named.
+
+tile:setMountedFish(id, weight) → bool
+live
+Mounts a fish on a wall mount. id 0 empties it. Applies at once, no world:updateTile needed.
+
+id
+A fish item id, or 0 to empty the plaque.
+weight
+Weight in lb, capped at 200.
+tile:setMountedName(name) → bool
+live
+Names the mounted fish. Up to 30 characters. Fails on an empty plaque.
+
+tile:getVendingItem() → number or nil
+live
+The item a Vending Machine/DigiVend is selling, 0 if empty, nil if not a vending machine.
+
+for _, t in ipairs(world:getTiles()) do
+    local id = t:getVendingItem()
+    if id and id ~= 0 then
+        local price = t:getVendingPrice()
+        local terms = price < 0 and (-price .. " per World Lock") or (price .. " World Locks each")
+        player:onConsoleMessage(getItem(id):getName() .. ": " .. t:getVendingCount() .. " left at " .. terms)
+    end
+end
+tile:getVendingCount() → number or nil
+live
+How many of that item are stocked in the machine.
+
+tile:getVendingPrice() → number or nil
+live
+The price; sign is the selling mode. Positive = locks per item. Negative = items per lock. 0 = not for sale.
+
+tile:getVendingEarnings() → number or nil
+live
+World Locks the machine has taken and not yet withdrawn. Read only.
+
+tile:setVending(id, count, price) → bool
+live
+Stocks a Vending Machine/DigiVend, applies at once. count is clamped to capacity; an out-of-range price is refused, not clamped.
+
+id
+The item to sell, or 0 to empty the machine, which forces count and price to 0 with it.
+count
+How many to stock. Negative becomes 0, and anything above the machine's capacity is clamped down to it.
+price
+Above 0, World Locks per item, up to 2000000. Below 0, items per World Lock, magnitude up to 200 and never more than count, so there is always at least one lock's worth in there to buy. 0 takes the machine off sale. Anything outside that is refused and nothing is written.
+onPlayerCommandCallback(function(world, player, cmd)
+    if cmd ~= "/shop" then return false end
+
+    local t = world:getTile(player:getBlockPosX(), player:getBlockPosY() - 1)
+    if not t or not t:getVendingItem() then
+        player:onConsoleMessage("`4Stand under a vending machine first.")
+        return true
+    end
+
+    -- 500 Dirt at 2 World Locks each
+    if t:setVending(2, 500, 2) then
+        player:onConsoleMessage("`2Machine restocked.")
+    else
+        player:onConsoleMessage("`4That price was refused.")
+    end
+    return true
+end)
+tile:getPosX() → number
+live
+The tile's X, in tile coordinates. Feed it straight to world:spawnItem.
+
+tile:getPosY() → number
+live
+The tile's Y, in tile coordinates.
+
+tile:getTileData(index) → number or nil
+live
+Reads a tile's growth data. index 0 = fruit count (trees only). index 1 = start timestamp (trees/providers). nil if not applicable.
+
+index
+0 for the fruit count (trees only), 1 for the planted or provider cycle-start timestamp (trees and providers).
+for _, t in ipairs(world:getTiles()) do
+    local fruit = t:getTileData(0)
+    if fruit and fruit > 0 then
+        player:onConsoleMessage("Tree at " .. t:getPosX() .. "," .. t:getPosY() .. " has " .. fruit .. " fruit.")
+    end
+
+    -- index 1 is shared by trees and providers, so one check covers both
+    local started = t:getTileData(1)
+    if started then
+        local left = started + getItem(t:getTileID()):getGrowTime() - os.time()
+        if left <= 0 then
+            player:onConsoleMessage("`2Ready`` at " .. t:getPosX() .. "," .. t:getPosY())
+        end
+    end
+end
+tile:setTileData(index, value) → boolean
+live
+Writes tile data. index 0 = fruit count 0-255 (trees only). index 1 = cycle-start timestamp (trees/providers). Same gating as getTileData.
+
+tile:setTileDataInt(index, value) → boolean
+live
+The same as tile:setTileData. Both names are accepted.
+
+Drop
+A dropped pile, from world:getDroppedItems(). It is a snapshot: it stays readable after the pile is gone, so re-read the list rather than holding one.
+
+drop:getItemID() → number
+live
+The item id in the pile.
+
+drop:getItemCount() → number
+live
+How many are in the pile.
+
+drop:getPosX() → number
+live
+Pixel x. Divide by 32 for tiles.
+
+drop:getPosY() → number
+live
+Pixel y. Divide by 32 for tiles.
+
+drop:getUID() → number
+live
+Identifies the pile while its world stays loaded. Not stable across an unload.
+
+BinaryWriter
+From BinaryWriter(). Every Write returns the writer, so calls chain.
+
+writer:WriteUInt8(n) → BinaryWriter
+live
+Appends one byte.
+
+writer:WriteUInt16(n) → BinaryWriter
+live
+Appends two bytes, little-endian.
+
+writer:WriteUInt32(n) → BinaryWriter
+live
+Appends four bytes, little-endian.
+
+writer:WriteString(s) → BinaryWriter
+live
+Appends the bytes as-is, with no length in front.
+
+writer:GetCurrentString() → string
+live
+Everything written so far.
+
+writer:Length() → number
+live
+Bytes written so far.
+
+writer:Clear() → BinaryWriter
+live
+Empties the writer.
+
+Item
+Obtained from getItem(id).
+
+item:getName() → string
+live
+The item's name.
+
+item:getRarity() → number
+live
+The item's rarity.
+
+item:getID() → number
+live
+The item's id.
+
+item:getDescription() → string
+live
+The item's description. Never empty: items with none read "This item has no description."
+
+item:getMachineCap() → number
+live
+How many items a magplant (item sucker) holds. Returns 0 for anything that is not a machine.
+
+5638
+MAGPLANT 5000, default 5,000
+9850
+MAGPLANT (15K), default 15,000
+10266
+Magplant (100K), default 100,000
+5930
+Legendary MAGPLANT 5000, default 500,000
+21220
+Mythical MAGPLANT 5000, default 3,000,000
+item:setMachineCap(value) → number or nil
+live
+Sets a magplant's capacity. Returns the value applied, or nil if this item has no capacity of its own.
+
+local mag = getItem(5638)
+local applied = mag:setMachineCap(10000)
+if applied then print("cap is now " .. applied) end
+item:getFarmability() → boolean
+live
+Whether the item is farmable (a tree/seed product).
+
+item:getGrowTime() → number
+live
+Grow time in seconds for a seed/tree, or 0.
+
+item:getMinFruitDropCount() → number
+live
+Lowest fruit a farmable tree yields (1 for farmable, else 0). The engine keeps no per-item min/max, so this reports the shared tree-growth range.
+
+item:getMaxFruitDropCount() → number
+live
+Highest fruit a farmable tree yields: 5, or 1 for rarity-999 items, else 0. Mirrors the engine's tree-growth formula.
+
+item:getInfo() → {string}
+live
+The item's notable property lines as an array (wrenchable, multi-facing, untradeable, no-self, never-drops-seeds). Empty if none apply.
+
+for _, line in ipairs(getItem(id):getInfo()) do
+    print(line)
+end
+item:getActionType() → number
+live
+The item's action type, the number that decides how it behaves when used/placed. 0 if unset.
+
+item:isBlacklisted() → boolean
+live
+Whether the item carries the No-/Buy flag. Pairs with onBlacklistAccessCallback when you want to check a single item rather than gate a whole command.
+
+InventoryItem
+Returned by getInventoryItems(), getBackpackItems() and getExtraBackpack().
+
+invItem:getItemID() → number
+live
+The item id in this slot.
+
+invItem:getItemCount() → number
+live
+How many are in this slot.
+
+PlayerAutofarm
+Returned by player:getAutofarm().
+
+autofarm:getSlots() → number
+live
+The player's current autofarm slot count.
+
+autofarm:setSlots(n) → boolean
+live
+Sets the slot count. Returns false if out of range.
+
+autofarm:getTargetBlockID() → number
+live
+The block id the autofarm is targeting. 0 when none is set.
+
+autofarm:setTargetBlockID(itemID) → boolean
+live
+Sets the block the autofarm targets. Does not switch autofarm on by itself.
+
+local af = player:getAutofarm()
+if af then af:setTargetBlockID(242) end
+Not dispatched yet
+These are accepted so imported scripts load, but nothing calls them yet, so a handler you register here never runs. Everything else on this page is live. Anything not on this page at all is an unknown global, which aborts the callback that touched it.
+
+onPlayerDNACallback(function(world, player, resultID, resultAmount) end)
+stub
+Registered, never called.
+
+onPlayerCrimeCallback(function(world, player, rewardID, rewardAmount) end)
+stub
+Registered so scripts load, but never called: there is no crime activity here to reward.
+
+world
+The world the reward was earned in.
+player
+The player being rewarded.
+rewardID
+Item id of the reward.
+rewardAmount
+How many were given.
+onPlayerCrimeCallback(function(world, player, rewardID, rewardAmount)
+    -- code here
+end)
+onPlayerCardBattleCallback(function(world, player, targetPlayer, rewardID, rewardAmount) end)
+stub
+Registered so scripts load, but never called: there are no card battles here to reward.
+
+world
+The world the battle took place in.
+player
+The player being rewarded.
+targetPlayer
+The opponent, or nil if they already left.
+rewardID
+Item id of the reward.
+rewardAmount
+How many were given.
+onPlayerCardBattleCallback(function(world, player, targetPlayer, rewardID, rewardAmount)
+    -- code here
+end)
+onPlayerEarnGrowtokenCallback(function(world, player, itemCount) end)
+stub
+Registered, never called.
+
+onPlayerHarmonicCallback(function(world, player, tile, itemID, itemCount) end)
+stub
+Registered, never called.
